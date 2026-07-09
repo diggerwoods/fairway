@@ -48,6 +48,11 @@
         .list-btns button.active { background: var(--accent2); color: #000; border-color: var(--accent2); }
         input, textarea { background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 10px; border-radius: 6px; font-size: 0.9rem; width: 100%; margin-bottom: 8px; }
         input:focus, textarea:focus { outline: none; border-color: var(--accent2); }
+        .photo-gallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 12px 0; }
+        .photo-gallery img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; cursor: pointer; }
+        .photo-upload { display: flex; gap: 8px; align-items: center; margin: 10px 0; }
+        .photo-upload label { background: var(--surface2); border: 1px solid var(--border); color: var(--accent2); padding: 8px 14px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; cursor: pointer; }
+        .photo-upload input[type="file"] { display: none; }
         .auth-panel { padding: 40px 20px; text-align: center; max-width: 360px; margin: 0 auto; }
         .auth-panel h2 { color: var(--accent2); margin-bottom: 20px; }
         .empty-state { padding: 40px; text-align: center; color: var(--dim); font-size: 0.85rem; }
@@ -182,7 +187,13 @@ function openCourseModal(course) {
     content.innerHTML = `
         <h2>${course.name}</h2>
         <p style="color:var(--dim);font-size:0.85rem;">${course.city || ''}, CO - ${course.holes} holes - Par ${course.par || '?'} - ${course.price_range || ''}</p>
+        <div class="photo-gallery" id="photo-gallery-${course.id}"><p style="color:var(--dim);font-size:0.75rem;grid-column:1/-1;">Loading photos...</p></div>
         ${currentUser ? `
+        <div class="photo-upload">
+            <label for="photo-input-${course.id}">📷 Add Photo</label>
+            <input type="file" id="photo-input-${course.id}" accept="image/*" onchange="uploadPhoto(${course.id}, this)">
+            <input type="text" id="photo-caption-${course.id}" placeholder="Caption (optional)" style="flex:1;margin:0;">
+        </div>
         <div class="list-btns">
             <button class="${inPlayed?'active':''}" onclick="toggleList(${course.id},'played')">✅ Played</button>
             <button class="${inWant?'active':''}" onclick="toggleList(${course.id},'want_to_play')">📋 Want</button>
@@ -200,9 +211,10 @@ function openCourseModal(course) {
         <textarea id="rating-notes" placeholder="Notes (optional)">${rating.notes||''}</textarea>
         <input type="date" id="rating-date" value="${rating.date_played||''}">
         <button class="btn" onclick="saveRating(${course.id})">Save Rating</button>
-        ` : '<p style="margin-top:16px;color:var(--dim);font-size:0.85rem;">Sign in to rate and track courses.</p>'}
+        ` : '<p style="margin-top:16px;color:var(--dim);font-size:0.85rem;">Sign in to rate, upload photos, and track courses.</p>'}
     `;
     modal.classList.add('show');
+    loadPhotos(course.id);
 }
 
 function renderRatingGroup(label, field, value) {
@@ -350,6 +362,39 @@ async function signOut() {
     updateAuthUI();
     renderLists();
 }
+
+async function loadPhotos(courseId) {
+    const { data } = await db.from('golf_photos').select('*').eq('course_id', courseId).order('created_at', { ascending: false });
+    const gallery = document.getElementById(`photo-gallery-${courseId}`);
+    if (!data || data.length === 0) {
+        gallery.innerHTML = '<p style="color:var(--dim);font-size:0.75rem;grid-column:1/-1;">No photos yet. Be the first to add one!</p>';
+        return;
+    }
+    gallery.innerHTML = data.map(p => `<img src="${p.photo_url}" alt="${p.caption || ''}" title="${p.caption || ''}" onclick="window.open('${p.photo_url}','_blank')">`).join('');
+}
+
+window.uploadPhoto = async function(courseId, input) {
+    if (!currentUser || !input.files[0]) return;
+    const file = input.files[0];
+    const ext = file.name.split('.').pop().toLowerCase();
+    const filename = `course-${courseId}-${Date.now()}.${ext}`;
+    const caption = document.getElementById(`photo-caption-${courseId}`)?.value || '';
+
+    // Upload to storage
+    const { error: uploadError } = await db.storage.from('golf-photos').upload(filename, file, { contentType: file.type, upsert: false });
+    if (uploadError) { alert('Upload failed: ' + uploadError.message); return; }
+
+    // Get public URL
+    const photoUrl = `${SUPABASE_URL}/storage/v1/object/public/golf-photos/${filename}`;
+
+    // Save to database
+    await db.from('golf_photos').insert({ course_id: courseId, user_id: currentUser.id, photo_url: photoUrl, caption: caption || null });
+
+    // Refresh gallery
+    input.value = '';
+    if (document.getElementById(`photo-caption-${courseId}`)) document.getElementById(`photo-caption-${courseId}`).value = '';
+    loadPhotos(courseId);
+};
 
 init();
 </script>
